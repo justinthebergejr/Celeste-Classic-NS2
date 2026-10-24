@@ -1,0 +1,365 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+layout(local_size_x=1) in;
+#include "abi.glsl"
+#include "hb.glsl"
+#include "game.glsl"
+
+void saveEntity(int i,Entity e) {
+    uint a=ENTITY_BASE+uint(i)*16u;
+    for (uint k=0u;k<4u;k++) {
+        c.atlas[a+k]=uint(e.meta[k]);
+        c.atlas[a+4u+k]=floatBitsToUint(e.pos[k]);
+        c.atlas[a+8u+k]=floatBitsToUint(e.work[k]);
+        c.atlas[a+12u+k]=uint(e.flags[k]);
+    }
+}
+float randomFloat() {
+    uint x=c.bagMeta.x; x^=x<<13u; x^=x>>17u; x^=x<<5u; c.bagMeta.x=x;
+    return float(x&65535u)/65536.0;
+}
+int addEntity(int type,vec2 pos) {
+    int index=-1;
+    for (int i=0;i<ENTITY_LIMIT;i++) {
+        if (i>=int(c.game.w) || entity(i).meta.x==0) {index=i;break;}
+    }
+    if (index<0) return -1;
+    c.game.w=max(c.game.w,uint(index+1));
+    Entity e;
+    e.meta=ivec4(type,type,0,0); e.pos=vec4(pos,0,0); e.work=vec4(pos,0,0); e.flags=ivec4(0);
+    if (type==11 || type==12 || type==20) e.pos.x-=4.0;
+    if (type==22) e.work.z=randomFloat();
+    if (type==20) {e.work.x=e.pos.x;e.meta.w=20;}
+    if (type==102) e.pos.w=-4.0;
+    if (type==118) e.pos.x+=5.0;
+    saveEntity(index,e);
+    return index;
+}
+void resetHair() {
+    for (int i=0;i<5;i++) {c.rows[i*2]=floatBitsToUint(c.flow.x);c.rows[i*2+1]=floatBitsToUint(c.flow.y);}
+}
+void loadRoom(uint room) {
+    c.game.x=min(room,31u); c.game.w=0u; c.library.x=0u;
+    c.bag[5]=0u; c.bag[7]=0u; c.motion.z=0.0;
+    c.refresh=vec4(0); c.piece=ivec4(0,0,int(c.bagMeta.y),0);
+    c.stats.z=0u; c.stats.w=0u; c.bagMeta.z=1u;
+    c.flow=vec4(8,96,0,0); c.motion.y=1.0; c.rows[10]=3u;
+    for (int i=0;i<ENTITY_LIMIT;i++) {Entity e=entity(i);e.meta.x=0;saveEntity(i,e);}
+    bool collected=(c.stats.x&(1u<<c.game.x))!=0u;
+    for (int x=0;x<16;x++) for (int y=0;y<16;y++) {
+        int tile=tileAt(ivec2(x,y)); vec2 p=vec2(x,y)*8.0;
+        if (tile==1) {c.flow.xy=p;resetHair();}
+        bool fruitRelated=tile==8||tile==20||tile==26||tile==28||tile==64;
+        if (collected && fruitRelated) continue;
+        if (tile==8||tile==11||tile==12||tile==18||tile==20||tile==22||tile==23||
+            tile==26||tile==28||tile==64||tile==86||tile==96||tile==118) addEntity(tile,p);
+    }
+    resetHair();
+}
+void newRun() {
+    c.game=uvec4(0,1,0,0); c.stats=uvec4(0); c.bagMeta.y=1u;
+    c.bag[4]=0u;c.bag[6]=0u; c.library.y=0u;
+    for (int i=11;i<17;i++) c.rows[i]=0u; // Keep display preferences across run restarts.
+    c.library.w=0u;c.motion.w=0.0;
+    loadRoom(0u);
+}
+void killPlayer() {
+    if (c.bagMeta.z==0u) return;
+    c.bagMeta.z=0u; c.stats.w=15u; c.game.z++; c.bag[4]=10u;
+}
+void openMenu() {
+    c.rows[13]=c.game.y;c.game.y=2u;
+    c.rows[11]=1u;c.rows[12]=0u;c.rows[14]=0u;
+    c.rows[15]=0u;c.rows[16]=0u;c.rows[19]=0u;c.motion.w=0.0;
+}
+void closeMenu() {
+    c.game.y=c.rows[13];c.rows[11]=0u;
+    c.rows[15]=0u;c.rows[16]=0u;c.rows[19]=0u;
+}
+void handleMenu(uint pressed,uint physical,vec2 stick) {
+    uint page=c.rows[11];
+    if ((pressed&(HB_B|HB_PLUS))!=0u) {
+        if (page==1u) closeMenu();
+        else {c.rows[11]=1u;c.rows[14]=0u;c.rows[15]=0u;c.rows[16]=0u;}
+        return;
+    }
+    int direction=int((physical&HB_DOWN)!=0u || stick.y<-.5)-int((physical&HB_UP)!=0u || stick.y>.5);
+    bool move=false;
+    if (direction==0) {c.rows[15]=0u;c.rows[16]=0u;}
+    else if (int(c.rows[15])!=direction) {
+        move=true;c.rows[15]=uint(direction);c.rows[16]=18u;
+    } else {
+        if (c.rows[16]>0u)c.rows[16]--;
+        if (c.rows[16]==0u) {move=true;c.rows[16]=6u;}
+    }
+    if (move && page==1u) {
+        int choice=int(c.rows[12]);
+        for (int i=0;i<MENU_COUNT;i++) {
+            choice=(choice+direction+MENU_COUNT)%MENU_COUNT;
+            if (menuEnabled(uint(choice))) break;
+        }
+        c.rows[12]=uint(choice);
+    } else if (move && page==4u) c.rows[14]^=1u;
+    else if (move && page==7u)c.library.w=uint((int(c.library.w)+direction+4)%4);
+    if (page==7u) {
+        int horizontal=stick.x<-.5?-1:(stick.x>.5?1:0);
+        bool left=(pressed&HB_LEFT)!=0u || (horizontal<0 && c.motion.w>=0.0);
+        bool right=(pressed&HB_RIGHT)!=0u || (horizontal>0 && c.motion.w<=0.0);
+        c.motion.w=float(horizontal);
+        bool confirm=(pressed&HB_A)!=0u;
+        if (confirm || left || right) {
+            if (c.library.w==0u)c.rows[17]^=1u;
+            else if(c.library.w==1u)c.rows[18]=uint((int(c.rows[18])+(left?-1:1)+4)%4);
+            else if(c.library.w==2u && confirm){c.rows[17]=0u;c.rows[18]=0u;}
+            else if(c.library.w==3u && confirm)c.rows[11]=1u;
+        }
+        return;
+    }
+    if ((pressed&HB_A)==0u) return;
+    if (page==1u) {
+        uint choice=c.rows[12];
+        if (!menuEnabled(choice)) return;
+        if (choice==0u) closeMenu();
+        else if (choice==1u) {closeMenu();killPlayer();}
+        else if (choice==2u) c.rows[11]=2u;
+        else if (choice==3u) {c.rows[11]=7u;c.library.w=0u;c.motion.w=0.0;}
+        else if (choice==4u) c.rows[11]=3u;
+        else {c.rows[11]=choice==5u?4u:5u;c.rows[14]=0u;}
+    } else if (page==4u) {
+        if (c.rows[14]==0u) c.rows[11]=1u;
+        else newRun();
+    }
+}
+void moveAxis(int axis,int amount,int start) {
+    int step=int(sign(float(amount)));
+    // Preserve the original Lua inclusive loop (0..abs(amount)), including its extra step.
+    for (int i=start;i<=min(abs(amount),16);i++) {
+        vec2 offset=axis==0 ? vec2(step,0) : vec2(0,step);
+        if (!solid(offset)) c.flow[axis]+=float(step);
+        else {c.flow[axis+2]=0.0;c.refresh[axis]=0.0;break;}
+    }
+}
+void movePlayer() {
+    c.refresh.xy+=c.flow.zw;
+    ivec2 amount=ivec2(floor(c.refresh.xy+0.5)); c.refresh.xy-=vec2(amount);
+    moveAxis(0,amount.x,0); moveAxis(1,amount.y,0);
+}
+void collectBerry(inout Entity e) {
+    c.stats.x|=1u<<c.game.x; c.piece.z=int(c.bagMeta.y); e.meta.x=0;
+}
+void breakFloor(inout Entity e) {
+    if (e.meta.z==0) {e.meta.z=1;e.meta.w=15;}
+}
+void updateObjects() {
+    for (int i=0;i<int(c.game.w);i++) {
+        Entity e=entity(i); int type=e.meta.x;
+        if (type==0) continue;
+        bool alive=c.bagMeta.z!=0u;
+        bool hit=alive && overlap(playerRect(vec2(0)),entityRect(e));
+        if (type==11 || type==12) {
+            float old=e.pos.x;
+            e.pos.x+=(type==11 ? -0.65 : 0.65);
+            if (e.pos.x < -16.0) e.pos.x=128.0;
+            else if (e.pos.x>128.0) e.pos.x=-16.0;
+            if (alive && !hit && overlap(playerRect(vec2(0,1)),vec4(old,e.pos.y,16,8))) {
+                // Fractional platform carry uses the player's X remainder, as in move_x(start=1).
+                c.refresh.x+=e.pos.x-old;
+                int amount=int(floor(c.refresh.x+0.5)); c.refresh.x-=float(amount);
+                moveAxis(0,amount,1);
+            }
+        } else if (type==23) {
+            if (e.meta.z==0 && alive && (overlap(playerRect(vec2(0,1)),entityRect(e)) ||
+                overlap(playerRect(vec2(-1,0)),entityRect(e)) || overlap(playerRect(vec2(1,0)),entityRect(e)))) breakFloor(e);
+            else if (e.meta.z==1) {
+                e.meta.w--; if (e.meta.w<=0) {e.meta.z=2;e.meta.w=60;}
+            } else if (e.meta.z==2) {
+                e.meta.w--; if (e.meta.w<=0 && !hit) {e.meta.z=0;e.meta.w=0;}
+            }
+            e.meta.y=e.meta.z==1 ? 23+(15-e.meta.w)/5 : 23;
+        } else if (type==18) {
+            // Follow the floor immediately below: a collapsing floor hides its spring too.
+            bool floorHidden=false;
+            for (int j=0;j<int(c.game.w);j++) {
+                Entity f=entity(j);
+                if (f.meta.x==23 && f.meta.z==2 && overlap(vec4(e.pos.xy+vec2(0,1),8,8),entityRect(f))) floorHidden=true;
+            }
+            e.meta.z=floorHidden?1:0;
+            if (floorHidden) e.meta.y=0;
+            else if (e.meta.w>0) {e.meta.w--;e.meta.y=19;}
+            else {
+                e.meta.y=18;
+                if (hit && c.flow.w>=0.0) {
+                    c.flow.y=e.pos.y-4.0;c.flow.z*=0.2;c.flow.w=-3.0;c.piece.z=int(c.bagMeta.y);e.meta.w=10;
+                    for (int j=0;j<int(c.game.w);j++) {
+                        Entity f=entity(j);
+                        if (f.meta.x==23 && overlap(vec4(e.pos.xy+vec2(0,1),8,8),entityRect(f))) {breakFloor(f);saveEntity(j,f);}
+                    }
+                }
+            }
+        } else if (type==22) {
+            if (e.meta.w>0) {e.meta.w--;e.meta.y=0;}
+            else {
+                e.meta.y=22;e.work.z+=0.01;e.pos.y=e.work.y+psin(e.work.z)*2.0;
+                if (hit && c.piece.z<int(c.bagMeta.y)) {c.piece.z=int(c.bagMeta.y);e.meta.w=60;e.meta.y=0;}
+            }
+        } else if (type==26) {
+            e.work.z+=1.0;e.pos.y=e.work.y+psin(e.work.z/40.0)*2.5;
+            if (hit) collectBerry(e);
+        } else if (type==28) {
+            if (c.motion.z!=0.0) e.meta.z=1;
+            if (e.meta.z==1) {e.pos.w=approach(e.pos.w,-3.5,0.25);e.pos.y+=e.pos.w;}
+            else {e.work.z+=0.05;e.pos.y+=psin(e.work.z+0.5)*0.5;}
+            if (hit) collectBerry(e);
+            else if (e.pos.y < -16.0) e.meta.x=0;
+        } else if (type==64) {
+            if (alive && c.refresh.w>0.0 && overlap(playerRect(vec2(0)),vec4(e.pos.xy-1.0,18,18))) {
+                c.flow.z=-sign(c.flow.z)*1.5;c.flow.w=-1.5;c.piece.w=-1;
+                e.meta.x=0; saveEntity(i,e);addEntity(26,e.pos.xy+4.0);
+                continue;
+            }
+        } else if (type==8) {
+            e.meta.y=9+int(floor((psin(float(c.stats.y%30u)/30.0)+0.5)));
+            if (hit) {c.bag[5]=1u;e.meta.x=0;}
+        } else if (type==20) {
+            if (c.bag[5]!=0u) {
+                e.meta.w--;e.pos.x=e.work.x-1.0+floor(randomFloat()*3.0);
+                if (e.meta.w<=0) {e.meta.x=0;saveEntity(i,e);addEntity(26,e.pos.xy+vec2(0,-4));continue;}
+            }
+        } else if (type==96) {
+            if (e.meta.z==0 && alive && overlap(playerRect(vec2(0,-8)),entityRect(e)) && solid(vec2(0,1))) {
+                e.meta.z=1;e.meta.w=60;c.bag[7]=1u;c.flow.zw=vec2(0);
+            } else if (e.meta.z==1) {
+                e.meta.w--;c.bag[4]=5u;
+                if (e.meta.w<0) {
+                    e.meta.z=2;c.bag[7]=0u;c.bag[6]=1u;
+                    saveEntity(i,e);addEntity(102,e.pos.xy+4.0);continue;
+                }
+            }
+        } else if (type==102) {
+            e.pos.y+=e.pos.w;e.pos.w=approach(e.pos.w,0.0,0.5);
+            if (e.pos.w==0.0 && hit) {
+                c.bagMeta.y=2u;c.piece.z=2;c.stats.z=10u;c.bag[4]=10u;e.meta.x=0;
+            }
+        } else if (type==118) {
+            e.meta.y=118+int((c.stats.y/5u)%3u);
+            if (hit) {c.game.y=3u;c.library.y=c.stats.y;}
+        }
+        saveEntity(i,e);
+    }
+}
+void playerPhysics(uint buttons,uint edges) {
+    movePlayer();
+    if (spikes() || c.flow.y>128.0) {killPlayer();return;}
+    bool ground=solid(vec2(0,1));
+    bool ice=tileSolid(playerRect(vec2(0,1)),4);
+    int runDir=(buttons&2u)!=0u ? 1 : ((buttons&1u)!=0u ? -1 : 0);
+    if ((edges&16u)!=0u) c.piece.y=4;
+    else c.piece.y=max(0,c.piece.y-1);
+    if (ground) {c.piece.x=6;c.piece.z=int(c.bagMeta.y);}
+    else c.piece.x=max(0,c.piece.x-1);
+    c.refresh.w-=1.0;
+    if (c.piece.w>0) {
+        c.piece.w--;
+        c.flow.z=approach(c.flow.z,uintBitsToFloat(c.bag[0]),uintBitsToFloat(c.bag[2]));
+        c.flow.w=approach(c.flow.w,uintBitsToFloat(c.bag[1]),uintBitsToFloat(c.bag[3]));
+    } else {
+        float accel=!ground ? 0.4 : (ice ? 0.05 : 0.6);
+        if (abs(c.flow.z)>1.0) c.flow.z=approach(c.flow.z,sign(c.flow.z),0.15);
+        else c.flow.z=approach(c.flow.z,float(runDir),accel);
+        if (c.flow.z!=0.0) c.motion.y=sign(c.flow.z);
+        float maxfall=2.0;
+        if (runDir!=0 && solid(vec2(runDir,0)) && !tileSolid(playerRect(vec2(runDir,0)),4)) maxfall=0.4;
+        if (!ground) c.flow.w=approach(c.flow.w,maxfall,abs(c.flow.w)<=0.15 ? 0.105 : 0.21);
+        if (c.piece.y>0) {
+            if (c.piece.x>0) {c.piece.y=0;c.piece.x=0;c.flow.w=-2.0;}
+            else {
+                int wall=solid(vec2(-3,0)) ? -1 : (solid(vec2(3,0)) ? 1 : 0);
+                if (wall!=0) {c.piece.y=0;c.flow.w=-2.0;c.flow.z=float(-wall)*2.0;}
+            }
+        }
+        if ((edges&32u)!=0u && c.piece.z>0) {
+            c.piece.z--;c.piece.w=4;c.refresh.w=10.0;c.motion.z=1.0;
+            int vertical=(buttons&4u)!=0u ? -1 : ((buttons&8u)!=0u ? 1 : 0);
+            float speed=vertical!=0 && runDir!=0 ? 3.5355339059 : 5.0;
+            if (runDir!=0 || vertical!=0) c.flow.zw=vec2(runDir,vertical)*speed;
+            else c.flow.zw=vec2(c.motion.y,0); // Match the supplied Lua's neutral dash.
+            vec2 target=sign(c.flow.zw)*2.0,acceleration=vec2(1.5);
+            if (c.flow.w<0.0) target.y*=0.75;
+            if (c.flow.w!=0.0) acceleration.x*=0.70710678118;
+            if (c.flow.z!=0.0) acceleration.y*=0.70710678118;
+            c.bag[0]=floatBitsToUint(target.x);c.bag[1]=floatBitsToUint(target.y);
+            c.bag[2]=floatBitsToUint(acceleration.x);c.bag[3]=floatBitsToUint(acceleration.y);
+            c.stats.z=2u;c.bag[4]=6u;
+        }
+    }
+    c.refresh.z+=0.25;
+    if (!ground) c.rows[10]=solid(vec2(runDir,0)) ? 5u : 3u;
+    else if ((buttons&8u)!=0u) c.rows[10]=6u;
+    else if ((buttons&4u)!=0u) c.rows[10]=7u;
+    else if (c.flow.z==0.0 || runDir==0) c.rows[10]=1u;
+    else c.rows[10]=1u+uint(c.refresh.z)%4u;
+    if (c.flow.y < -4.0 && c.game.x<30u) {loadRoom(c.game.x+1u);return;}
+    if (c.flow.x < -1.0 || c.flow.x>121.0) {c.flow.x=clamp(c.flow.x,-1.0,121.0);c.flow.z=0.0;}
+}
+void updateHair(uint buttons) {
+    vec2 last=c.flow.xy+vec2(4.0-c.motion.y*2.0,(buttons&8u)!=0u ? 4.0 : 3.0);
+    for (int i=0;i<5;i++) {
+        vec2 hair=uintBitsToFloat(uvec2(c.rows[i*2],c.rows[i*2+1]));
+        hair+=(last+vec2(0,0.5)-hair)/1.5;
+        c.rows[i*2]=floatBitsToUint(hair.x);c.rows[i*2+1]=floatBitsToUint(hair.y);last=hair;
+    }
+}
+void main() {
+    c.state.z++;c.transition.x=max(0.0,c.transition.x-1.0/15.0);
+    if (c.state.x==0u) {
+        c.state.x=1u;c.bagMeta.x=0x52ce1e57u;c.bagMeta.y=1u;
+        loadRoom(31u);c.game.y=0u;
+    }
+    uint pressed=hbPressed(),physical=hbButtons();
+    bool connected=hbConnected();
+    // Known issue: returning to HBLauncher fails on-console. Show manual leaving
+    // instructions instead of issuing another broken exit request.
+    if (connected && (pressed&HB_MINUS)!=0u) {
+        if(c.game.y!=2u)openMenu();
+        c.rows[11]=5u;c.rows[12]=6u;c.rows[19]=0u;
+        hbEndFrame();return;
+    }
+    uint buttons=0u;
+    vec2 stick=vec2(0);
+    if (connected) {
+        stick=hbStick(false);vec2 s=stick;
+        if ((physical&HB_LEFT)!=0u || s.x<-.4) buttons|=1u;
+        if ((physical&HB_RIGHT)!=0u || s.x>.4) buttons|=2u;
+        if ((physical&HB_UP)!=0u || s.y>.4) buttons|=4u;
+        if ((physical&HB_DOWN)!=0u || s.y<-.4) buttons|=8u;
+        if ((physical&(HB_A|HB_B))!=0u) buttons|=16u;
+        if ((physical&(HB_X|HB_Y))!=0u) buttons|=32u;
+    }
+    c.rows[19]|=(buttons&~c.bagMeta.w)&48u; c.bagMeta.w=buttons;
+    if (c.game.y==2u) {
+        if (connected) handleMenu(pressed,physical,stick);
+        c.rows[19]=0u;hbEndFrame();return;
+    }
+    if (!connected && c.game.y==1u) {openMenu();hbEndFrame();return;}
+    if (connected && (pressed&HB_PLUS)!=0u) {
+        openMenu();hbEndFrame();return;
+    }
+    if (connected && c.game.y==0u && (c.rows[19]&48u)!=0u) {newRun();c.rows[19]=0u;hbEndFrame();return;}
+    if (connected && c.game.y==3u && (pressed&HB_A)!=0u) {openMenu();c.rows[12]=5u;hbEndFrame();return;}
+    if (connected && c.game.y==1u && (pressed&HB_L)!=0u) {killPlayer();}
+    if (c.game.y!=1u) {c.rows[19]=0u;hbEndFrame();return;}
+    if ((c.state.z&1u)!=0u) {hbEndFrame();return;}
+    uint edges=c.rows[19];c.rows[19]=0u;
+    c.stats.y++;c.motion.x=float(c.stats.y)/30.0;
+    if (c.stats.z>0u) {c.stats.z--;hbEndFrame();return;}
+    c.library.x++; if (c.bag[4]>0u) c.bag[4]--;
+    if (c.stats.w>0u) {
+        c.stats.w--;
+        if (c.stats.w==0u) loadRoom(c.game.x);
+    } else {
+        if (c.bagMeta.z!=0u && c.bag[7]==0u) playerPhysics(buttons,edges);
+        updateObjects();
+        if (c.bagMeta.z!=0u) updateHair(buttons);
+    }
+    hbEndFrame();
+}

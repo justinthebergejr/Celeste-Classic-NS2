@@ -1,0 +1,16 @@
+{
+  "format": "hblauncher.gpu-app",
+  "abi": 1,
+  "id": "celeste-classic-ns2",
+  "name": "Celeste Classic for NS2",
+  "version": "0.3.3",
+  "description": "Experimental Celeste Classic port. Silent prototype. Known issue: cannot return to HBLauncher; quit SmileBASIC to leave the game.",
+  "icon": "assets/icon.png",
+  "initialState": "assets/state.bin",
+  "data": "assets/data.bin",
+  "shaders": {
+    "vertex": "app.vert.spv",
+    "fragment": "app.frag.spv",
+    "compute": "app.comp.spv"
+  }
+}

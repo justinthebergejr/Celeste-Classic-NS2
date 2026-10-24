@@ -1,0 +1,22 @@
+{
+  "celeste.p8.png": {
+    "url": "https://www.lexaloffle.com/bbs/cposts/1/15133.p8.png",
+    "sha256": "b8c78f53bc18cd9c8830c794093a3b724d6208de9eae290f0b84403225740188"
+  },
+  "LICENSE-code.txt": {
+    "url": "https://raw.githubusercontent.com/NoelFB/Celeste/1b0ce45c75e05649ae91b44a8bb6b196684e4352/LICENSE",
+    "sha256": "096b580c9b4f487596eeda22964610685018525a5af7bbb1518f2b5e442661d6"
+  },
+  "font.png": {
+    "url": "https://raw.githubusercontent.com/NoelFB/Celeste/1b0ce45c75e05649ae91b44a8bb6b196684e4352/Source/PICO-8/Graphics/font.png",
+    "sha256": "d626a96804cdfee5391c8b7270437ce5724d2a552c7744d5bfcb6ba2a339dacd"
+  },
+  "Classic.cs": {
+    "url": "https://raw.githubusercontent.com/NoelFB/Celeste/1b0ce45c75e05649ae91b44a8bb6b196684e4352/Source/PICO-8/Classic.cs",
+    "sha256": "657515f88328d0269fca3d5b83acbafb8bc61b24db7f5b6bff8a7d442fcb833d"
+  },
+  "celeste.lua": {
+    "source": "User-provided celeste.lua (original source file)",
+    "sha256": "efe6360170857a6c41f2a4767bd8a6962274c8f7d0e7b76d7e0b231a8a554688"
+  }
+}
